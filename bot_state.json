@@ -1,0 +1,24 @@
+{
+  "user_warnings": {},
+  "antispam_config": {
+    "MAX_WARNINGS": 2,
+    "BAN_DURATION": 86400,
+    "DELETE_SPAM": true,
+    "BLACKLIST_WORDS": [
+      "купить",
+      "продать",
+      "http://",
+      "https://",
+      "бесплатно",
+      "реклама",
+      "промокод",
+      "Микрозаймы"
+    ],
+    "ADMIN_IDS": [
+      1389663038
+    ],
+    "MAX_REPEATED_MESSAGES": 3,
+    "REPEAT_TIME_WINDOW": 60
+  },
+  "banned_users": {}
+}

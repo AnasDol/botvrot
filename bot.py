@@ -2,6 +2,7 @@ import os
 import re
 import time
 import asyncio
+import json
 from datetime import datetime
 from telegram import Update, ChatPermissions
 from telegram.ext import (
@@ -13,18 +14,55 @@ from telegram.ext import (
 )
 from config import ANTISPAM_CONFIG, user_warnings, message_history
 from dotenv import load_dotenv
-# Добавим в начало файла
 from telegram.constants import ParseMode
 
 # Загружаем токен из .env
 load_dotenv()
 
-# Загрузка конфигурации
+# Константы
+STATE_FILE = "bot_state.json"
 TOKEN = os.getenv('TELEGRAM_TOKEN')
-OWNER_ID = int(os.getenv('OWNER_ID'))  # Преобразуем в int
+OWNER_ID = int(os.getenv('OWNER_ID'))
 MAX_WARNINGS = ANTISPAM_CONFIG["MAX_WARNINGS"]
 BLACKLIST = ANTISPAM_CONFIG["BLACKLIST_WORDS"]
 
+
+# Функции для работы с состоянием
+def save_state():
+    state = {
+        "user_warnings": user_warnings,
+        "antispam_config": ANTISPAM_CONFIG,
+        "banned_users": ANTISPAM_CONFIG.get('banned_users', {})
+    }
+    with open(STATE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+
+        # Восстанавливаем состояние
+        user_warnings.update(state.get("user_warnings", {}))
+
+        # Обновляем конфиг антиспама
+        ANTISPAM_CONFIG.update(state.get("antispam_config", {}))
+
+        # Восстанавливаем заблокированных пользователей
+        if 'banned_users' not in ANTISPAM_CONFIG:
+            ANTISPAM_CONFIG['banned_users'] = {}
+        ANTISPAM_CONFIG['banned_users'].update(state.get("banned_users", {}))
+
+        # Обновляем глобальные ссылки
+        global BLACKLIST, MAX_WARNINGS
+        BLACKLIST = ANTISPAM_CONFIG["BLACKLIST_WORDS"]
+        MAX_WARNINGS = ANTISPAM_CONFIG["MAX_WARNINGS"]
+
+    except FileNotFoundError:
+        print("Файл состояния не найден, используется начальная конфигурация")
+    except json.JSONDecodeError:
+        print("Ошибка чтения файла состояния, используется начальная конфигурация")
 
 # Проверка на спам
 def is_spam(text: str) -> bool:
@@ -136,11 +174,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             # Сброс предупреждений
             del user_warnings[user_key]
+            save_state()  # Сохраняем состояние после изменения
 
             # Добавляем в список заблокированных
             if 'banned_users' not in ANTISPAM_CONFIG:
                 ANTISPAM_CONFIG['banned_users'] = {}
             ANTISPAM_CONFIG['banned_users'][user_key] = time.time() + ANTISPAM_CONFIG["BAN_DURATION"]
+            save_state()  # Сохраняем состояние после изменения
 
         except Exception as e:
             print(f"Ошибка бана: {e}")
@@ -156,6 +196,7 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_admin_id = int(context.args[0])
         if new_admin_id not in ANTISPAM_CONFIG["ADMIN_IDS"]:
             ANTISPAM_CONFIG["ADMIN_IDS"].append(new_admin_id)
+            save_state()  # Сохраняем состояние после изменения
             await update.message.reply_text(f"✅ Пользователь {new_admin_id} добавлен в администраторы")
         else:
             await update.message.reply_text("ℹ️ Этот пользователь уже администратор")
@@ -197,10 +238,12 @@ async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_key = f"{chat_id}_{user_id}"
         if 'banned_users' in ANTISPAM_CONFIG and user_key in ANTISPAM_CONFIG['banned_users']:
             del ANTISPAM_CONFIG['banned_users'][user_key]
+            save_state()  # Сохраняем состояние после изменения
 
         # Сбрасываем предупреждения
         if user_key in user_warnings:
             del user_warnings[user_key]
+            save_state()  # Сохраняем состояние после изменения
 
         await update.message.reply_text(f"✅ Пользователь {user_id} разблокирован")
 
@@ -219,7 +262,7 @@ async def add_to_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_message = update.message.reply_to_message
-    text_to_add = target_message.text or target_message.caption
+    text_to_add = target_message.text.lower() or target_message.caption.lower()
 
     if not text_to_add:
         await update.message.reply_text("ℹ️ Целевое сообщение не содержит текста")
@@ -230,7 +273,8 @@ async def add_to_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     BLACKLIST.append(text_to_add)
-    ANTISPAM_CONFIG["BLACKLIST_WORDS"] = BLACKLIST  # Синхронизация конфига
+    ANTISPAM_CONFIG["BLACKLIST_WORDS"] = BLACKLIST
+    save_state()  # Сохраняем состояние после изменения
 
     await update.message.reply_text(
         f"✅ Текст добавлен в чёрный список:\n`{text_to_add}`",
@@ -240,6 +284,9 @@ async def add_to_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция
 def main():
+    # Загружаем состояние при запуске
+    load_state()
+
     app = Application.builder().token(TOKEN).build()
 
     # Обработчики
